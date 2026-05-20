@@ -112,19 +112,34 @@ def init(
 
 @app.command()
 def index(
-    path: Annotated[Optional[Path], typer.Argument(help="Root or any subdirectory (default: current dir)")] = None,
+    path: Annotated[Optional[Path], typer.Argument(help="Directory to index (default: current dir)")] = None,
     provider: Annotated[Optional[str], typer.Option("--provider", "-p", help="Embedding provider: voyage, jina")] = None,
     model: Annotated[Optional[str], typer.Option("--model", "-m", help="Model name")] = None,
     force: Annotated[bool, typer.Option("--force", "-f", help="Re-embed all files even if unchanged")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Suppress progress output")] = False,
 ):
-    """Index a folder: compute and store embeddings for all markdown files."""
+    """Index a directory: compute and store embeddings for markdown files within it.
+
+    The index store (.tinygrep/) is found by walking up from the given directory
+    (or CWD), so you can index any subdirectory and it will save to the right place.
+    """
     from .config import Config
     from .db import Database
     from .indexer import index_folder
     from .providers import get_provider
 
-    root = _resolve_root(path)
+    # What to walk — plain directory validation, no root discovery.
+    index_dir = _resolve_dir(path)
+
+    # Where to store — walk up to find the nearest .tinygrep/.
+    root = _find_root(index_dir)
+    if root is None:
+        err_console.print(
+            "[red]Error:[/red] No tinygrep root found. "
+            "Run [bold]tinygrep init[/bold] in the folder you want to use as the index root."
+        )
+        raise typer.Exit(1)
+
     cfg = Config.load(root)
     if provider:
         cfg.provider.name = provider
@@ -132,7 +147,8 @@ def index(
         cfg.provider.model = model
 
     if not quiet:
-        console.print(f"Root: [bold]{root}[/bold]")
+        console.print(f"Indexing: [bold]{index_dir}[/bold]")
+        console.print(f"Store:    [bold]{root / '.tinygrep'}[/bold]")
 
     api_key = cfg.api_key()
     resolved_model = cfg.provider.resolved_model()
@@ -141,7 +157,8 @@ def index(
     db_file = _db_path(root)
     with Database(db_file) as db:
         stats = index_folder(
-            folder=root,
+            folder=index_dir,
+            root=root,
             db=db,
             provider=emb_provider,
             cfg=cfg,

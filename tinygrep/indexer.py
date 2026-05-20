@@ -57,12 +57,19 @@ def walk_folder(folder: Path, extensions: list[str]) -> list[Path]:
 
 def index_folder(
     folder: Path,
+    root: Path,
     db: Database,
     provider: EmbeddingProvider,
     cfg: Config,
     force: bool = False,
     verbose: bool = True,
 ) -> dict:
+    """
+    Walk *folder*, embed its files, and store them in the DB.
+    Paths stored in the DB are relative to *root* (the index store root),
+    so they remain stable no matter which subdirectory index was called from.
+    *folder* must be equal to or a subdirectory of *root*.
+    """
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
     files = walk_folder(folder, cfg.index.file_extensions)
@@ -71,7 +78,7 @@ def index_folder(
     # Identify which files actually need embedding
     pending: list[tuple[Path, str, str]] = []  # (path, rel_path, content)
     for file_path in files:
-        rel = str(file_path.relative_to(folder))
+        rel = str(file_path.relative_to(root))
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
