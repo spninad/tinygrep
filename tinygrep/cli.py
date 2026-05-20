@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
 
 app = typer.Typer(
     name="tinygrep",
@@ -21,26 +19,58 @@ err_console = Console(stderr=True)
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers
+# Root discovery  (mirrors how git finds .git/)
 # ---------------------------------------------------------------------------
 
-def _resolve_folder(folder: Optional[Path]) -> Path:
-    p = (folder or Path(".")).expanduser().resolve()
+def _find_root(start: Path) -> Optional[Path]:
+    """Walk up the directory tree from start, return the first dir that contains .tinygrep/."""
+    current = start.resolve()
+    while True:
+        if (current / ".tinygrep").is_dir():
+            return current
+        parent = current.parent
+        if parent == current:   # reached filesystem root
+            return None
+        current = parent
+
+
+def _resolve_root(path: Optional[Path]) -> Path:
+    """
+    Resolve the tinygrep root by walking up from path (or CWD).
+    Exits with an error if no .tinygrep/ directory is found.
+    """
+    start = (path or Path(".")).expanduser().resolve()
+    if path and not start.is_dir():
+        err_console.print(f"[red]Error:[/red] '{start}' is not a directory.")
+        raise typer.Exit(1)
+    root = _find_root(start)
+    if root is None:
+        err_console.print(
+            "[red]Error:[/red] No tinygrep root found. "
+            "Run [bold]tinygrep init[/bold] in the folder you want to index."
+        )
+        raise typer.Exit(1)
+    return root
+
+
+def _resolve_dir(path: Optional[Path]) -> Path:
+    """Plain directory resolver used only by init (no root walking)."""
+    p = (path or Path(".")).expanduser().resolve()
     if not p.is_dir():
         err_console.print(f"[red]Error:[/red] '{p}' is not a directory.")
         raise typer.Exit(1)
     return p
 
 
-def _db_path(folder: Path) -> Path:
-    return folder / ".tinygrep" / "index.db"
+def _db_path(root: Path) -> Path:
+    return root / ".tinygrep" / "index.db"
 
 
-def _load_provider(folder: Path, provider_name: Optional[str], model_name: Optional[str]):
+def _load_provider(root: Path, provider_name: Optional[str], model_name: Optional[str]):
     from .config import Config
     from .providers import get_provider
 
-    cfg = Config.load(folder)
+    cfg = Config.load(root)
     if provider_name:
         cfg.provider.name = provider_name
     if model_name:
@@ -53,12 +83,36 @@ def _load_provider(folder: Path, provider_name: Optional[str], model_name: Optio
 
 
 # ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+@app.command()
+def init(
+    folder: Annotated[Optional[Path], typer.Argument(help="Folder to initialize (default: current dir)")] = None,
+):
+    """Create a .tinygrep/ directory to mark the root of an index."""
+    folder_path = _resolve_dir(folder)
+    tg_dir = folder_path / ".tinygrep"
+
+    if tg_dir.exists():
+        console.print(f"[yellow]Already initialized:[/yellow] {tg_dir}")
+        raise typer.Exit(0)
+
+    tg_dir.mkdir(parents=True)
+    console.print(f"[green]Initialized[/green] {tg_dir}")
+    console.print(
+        f"\nRun [bold]tinygrep index[/bold] from anywhere inside "
+        f"[bold]{folder_path}[/bold] to start indexing."
+    )
+
+
+# ---------------------------------------------------------------------------
 # index
 # ---------------------------------------------------------------------------
 
 @app.command()
 def index(
-    folder: Annotated[Optional[Path], typer.Argument(help="Folder to index (default: current dir)")] = None,
+    path: Annotated[Optional[Path], typer.Argument(help="Root or any subdirectory (default: current dir)")] = None,
     provider: Annotated[Optional[str], typer.Option("--provider", "-p", help="Embedding provider: voyage, jina")] = None,
     model: Annotated[Optional[str], typer.Option("--model", "-m", help="Model name")] = None,
     force: Annotated[bool, typer.Option("--force", "-f", help="Re-embed all files even if unchanged")] = False,
@@ -70,21 +124,24 @@ def index(
     from .indexer import index_folder
     from .providers import get_provider
 
-    folder_path = _resolve_folder(folder)
-    cfg = Config.load(folder_path)
+    root = _resolve_root(path)
+    cfg = Config.load(root)
     if provider:
         cfg.provider.name = provider
     if model:
         cfg.provider.model = model
 
+    if not quiet:
+        console.print(f"Root: [bold]{root}[/bold]")
+
     api_key = cfg.api_key()
     resolved_model = cfg.provider.resolved_model()
     emb_provider = get_provider(cfg.provider.name, resolved_model, api_key)
 
-    db_file = _db_path(folder_path)
+    db_file = _db_path(root)
     with Database(db_file) as db:
         stats = index_folder(
-            folder=folder_path,
+            folder=root,
             db=db,
             provider=emb_provider,
             cfg=cfg,
@@ -109,7 +166,7 @@ def index(
 @app.command()
 def search(
     query: Annotated[str, typer.Argument(help="Search query")],
-    folder: Annotated[Optional[Path], typer.Option("--folder", "-d", help="Indexed folder (default: current dir)")] = None,
+    path: Annotated[Optional[Path], typer.Option("--folder", "-d", help="Root or any subdirectory (default: current dir)")] = None,
     top_n: Annotated[int, typer.Option("--top-n", "-n", help="Number of results")] = 10,
     output_format: Annotated[str, typer.Option("--format", "-o", help="Output format: text, json")] = "text",
     provider: Annotated[Optional[str], typer.Option("--provider", "-p")] = None,
@@ -120,12 +177,12 @@ def search(
     from .db import Database
     from .search import search as do_search
 
-    folder_path = _resolve_folder(folder)
-    emb_provider, _ = _load_provider(folder_path, provider, model)
+    root = _resolve_root(path)
+    emb_provider, _ = _load_provider(root, provider, model)
 
-    db_file = _db_path(folder_path)
+    db_file = _db_path(root)
     if not db_file.exists():
-        err_console.print("[red]Error:[/red] No index found. Run [bold]tinygrep index[/bold] first.")
+        err_console.print("[red]Error:[/red] Index is empty. Run [bold]tinygrep index[/bold] first.")
         raise typer.Exit(1)
 
     with Database(db_file) as db:
@@ -178,7 +235,7 @@ def _print_search_results(results: list[dict], full: bool = False) -> None:
 
 @app.command()
 def cluster(
-    folder: Annotated[Optional[Path], typer.Argument(help="Indexed folder (default: current dir)")] = None,
+    path: Annotated[Optional[Path], typer.Argument(help="Root or any subdirectory (default: current dir)")] = None,
     min_cluster_size: Annotated[int, typer.Option("--min-size", "-s", help="Min files per cluster")] = 3,
     output_format: Annotated[str, typer.Option("--format", "-o", help="Output format: text, json")] = "text",
     provider: Annotated[Optional[str], typer.Option("--provider", "-p")] = None,
@@ -188,12 +245,12 @@ def cluster(
     from .cluster import cluster_documents, group_by_cluster
     from .db import Database
 
-    folder_path = _resolve_folder(folder)
-    emb_provider, _ = _load_provider(folder_path, provider, model)
+    root = _resolve_root(path)
+    emb_provider, _ = _load_provider(root, provider, model)
 
-    db_file = _db_path(folder_path)
+    db_file = _db_path(root)
     if not db_file.exists():
-        err_console.print("[red]Error:[/red] No index found. Run [bold]tinygrep index[/bold] first.")
+        err_console.print("[red]Error:[/red] Index is empty. Run [bold]tinygrep index[/bold] first.")
         raise typer.Exit(1)
 
     with Database(db_file) as db:
@@ -215,11 +272,7 @@ def cluster(
     groups = group_by_cluster(labels)
 
     if output_format == "json":
-        output = {
-            str(label): files
-            for label, files in groups.items()
-        }
-        # Rename -1 to "noise"
+        output = {str(label): files for label, files in groups.items()}
         if "-1" in output:
             output["noise"] = output.pop("-1")
         print(json.dumps(output, indent=2))
@@ -252,7 +305,7 @@ def _print_clusters(groups: dict[int, list[str]]) -> None:
 
 @app.command()
 def status(
-    folder: Annotated[Optional[Path], typer.Argument(help="Indexed folder (default: current dir)")] = None,
+    path: Annotated[Optional[Path], typer.Argument(help="Root or any subdirectory (default: current dir)")] = None,
     provider: Annotated[Optional[str], typer.Option("--provider", "-p")] = None,
     model: Annotated[Optional[str], typer.Option("--model", "-m")] = None,
 ):
@@ -261,32 +314,35 @@ def status(
     from .db import Database
     from .indexer import sha256, walk_folder
 
-    folder_path = _resolve_folder(folder)
-    cfg = Config.load(folder_path)
+    root = _resolve_root(path)
+    cfg = Config.load(root)
     if provider:
         cfg.provider.name = provider
     if model:
         cfg.provider.model = model
 
-    db_file = _db_path(folder_path)
+    db_file = _db_path(root)
     if not db_file.exists():
-        console.print("[yellow]No index found.[/yellow] Run [bold]tinygrep index[/bold] to get started.")
+        console.print(
+            f"Root: [bold]{root}[/bold]\n"
+            "[yellow]No index yet.[/yellow] Run [bold]tinygrep index[/bold] to build it."
+        )
         raise typer.Exit(0)
 
     with Database(db_file) as db:
         indexed_docs = {d["path"]: d for d in db.get_all_documents()}
 
-    disk_files = walk_folder(folder_path, cfg.index.file_extensions)
-    disk_rel = {str(f.relative_to(folder_path)): f for f in disk_files}
+    disk_files = walk_folder(root, cfg.index.file_extensions)
+    disk_rel = {str(f.relative_to(root)): f for f in disk_files}
 
     up_to_date: list[str] = []
     stale: list[str] = []
     unindexed: list[str] = []
     deleted: list[str] = []
 
-    for rel, path in disk_rel.items():
+    for rel, fpath in disk_rel.items():
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
+            content = fpath.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         current_hash = sha256(content)
@@ -302,22 +358,20 @@ def status(
         if rel not in disk_rel:
             deleted.append(rel)
 
-    # Summary
-    total = len(disk_rel)
-    console.print(f"\nFolder: [bold]{folder_path}[/bold]")
-    console.print(f"Index:  [bold]{db_file}[/bold]\n")
+    console.print(f"\nRoot:  [bold]{root}[/bold]")
+    console.print(f"Index: [bold]{db_file}[/bold]\n")
     console.print(f"  [green]✓[/green] Up-to-date:  {len(up_to_date)}")
     console.print(f"  [yellow]~[/yellow] Stale:       {len(stale)}")
     console.print(f"  [blue]+[/blue] Unindexed:   {len(unindexed)}")
     console.print(f"  [red]✗[/red] Deleted:     {len(deleted)}")
-    console.print(f"    Total files: {total}\n")
+    console.print(f"    Total files: {len(disk_rel)}\n")
 
     if stale:
         console.print("[yellow]Stale files (content changed):[/yellow]")
         for f in stale[:20]:
             console.print(f"  {f}")
         if len(stale) > 20:
-            console.print(f"  ... and {len(stale) - 20} more")
+            console.print(f"  … and {len(stale) - 20} more")
         console.print()
 
     if unindexed:
@@ -325,7 +379,7 @@ def status(
         for f in unindexed[:20]:
             console.print(f"  {f}")
         if len(unindexed) > 20:
-            console.print(f"  ... and {len(unindexed) - 20} more")
+            console.print(f"  … and {len(unindexed) - 20} more")
         console.print()
 
     if deleted:
@@ -335,7 +389,7 @@ def status(
         console.print()
 
     if stale or unindexed:
-        console.print("Run [bold]tinygrep index[/bold] to update the index.")
+        console.print("Run [bold]tinygrep index[/bold] to update.")
 
 
 # ---------------------------------------------------------------------------
