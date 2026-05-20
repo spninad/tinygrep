@@ -36,3 +36,8 @@ class VoyageProvider(EmbeddingProvider):
     @property
     def batch_size(self) -> int:
         return 128
+
+    @property
+    def max_tokens_per_batch(self) -> int:
+        # Voyage hard limit is 120k; stay well clear of it.
+        return 100_000

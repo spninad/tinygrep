@@ -17,4 +17,10 @@ class EmbeddingProvider(ABC):
 
     @property
     def batch_size(self) -> int:
+        """Maximum number of texts per API request."""
         return 64
+
+    @property
+    def max_tokens_per_batch(self) -> int:
+        """Maximum estimated tokens per API request (rough chars/4 heuristic)."""
+        return 100_000

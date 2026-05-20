@@ -2,11 +2,35 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 from .config import Config
 from .db import Database
 from .providers.base import EmbeddingProvider
+
+_CHARS_PER_TOKEN = 4  # rough heuristic for token estimation
+
+
+def _token_batches(
+    texts: list[str], max_items: int, max_tokens: int
+) -> Iterator[list[str]]:
+    """
+    Yield batches that respect both a maximum item count and a maximum
+    estimated token count. Uses len(text) / _CHARS_PER_TOKEN as the estimate.
+    """
+    batch: list[str] = []
+    batch_tokens = 0
+    for text in texts:
+        estimated = max(1, len(text) // _CHARS_PER_TOKEN)
+        if batch and (len(batch) >= max_items or batch_tokens + estimated > max_tokens):
+            yield batch
+            batch = []
+            batch_tokens = 0
+        batch.append(text)
+        batch_tokens += estimated
+    if batch:
+        yield batch
 
 
 def sha256(text: str) -> str:
@@ -120,7 +144,6 @@ def index_folder(
     texts = [c[3] for c in all_chunks]
     embeddings: list[list[float]] = []
 
-    batch_size = provider.batch_size
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -133,8 +156,7 @@ def index_folder(
             f"Embedding {len(texts)} chunks from {len(pending)} files...",
             total=len(texts),
         )
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
+        for batch in _token_batches(texts, provider.batch_size, provider.max_tokens_per_batch):
             embs = provider.embed(batch, input_type="document")
             embeddings.extend(embs)
             progress.advance(task, len(batch))
