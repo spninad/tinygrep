@@ -1,0 +1,18 @@
+# tinygrep configuration
+# Copy this to <your-folder>/.tinygrep/config.toml or ~/.config/tinygrep/config.toml
+
+[provider]
+# "voyage" or "jina"
+name  = "voyage"
+# Leave empty to use the provider's recommended default
+# Voyage options: voyage-4-large, voyage-4, voyage-4-lite, voyage-4-nano, voyage-code-3
+# Jina options:   jina-embeddings-v3
+model = "voyage-4-large"
+
+[index]
+# Target chunk size in characters (~500 tokens)
+chunk_size    = 2000
+# Overlap between consecutive chunks in characters
+chunk_overlap = 200
+# File extensions to index
+file_extensions = [".md", ".txt", ".mdx"]

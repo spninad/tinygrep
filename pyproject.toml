@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tinygrep"
+version = "0.1.0"
+description = "Semantic search and clustering for local markdown folders"
+requires-python = ">=3.11"
+dependencies = [
+    "typer[all]>=0.12",
+    "rich>=13",
+    "voyageai>=0.3",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "umap-learn>=0.5",
+    "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.4"]
+
+[project.scripts]
+tinygrep = "tinygrep.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tinygrep"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
