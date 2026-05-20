@@ -39,5 +39,6 @@ class VoyageProvider(EmbeddingProvider):
 
     @property
     def max_tokens_per_batch(self) -> int:
-        # Voyage hard limit is 120k; stay well clear of it.
-        return 100_000
+        # Voyage hard limit is 120k. Use 60k so the ~2x variance in our
+        # chars-per-token estimate still keeps actual tokens well under the cap.
+        return 60_000

@@ -9,7 +9,7 @@ from .config import Config
 from .db import Database
 from .providers.base import EmbeddingProvider
 
-_CHARS_PER_TOKEN = 4  # rough heuristic for token estimation
+_CHARS_PER_TOKEN = 3  # conservative heuristic — dense content (code, URLs) can hit 2-3
 
 
 def _token_batches(
