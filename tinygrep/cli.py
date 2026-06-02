@@ -189,13 +189,13 @@ def search(
     provider: Annotated[Optional[str], typer.Option("--provider", "-p")] = None,
     model: Annotated[Optional[str], typer.Option("--model", "-m")] = None,
     full: Annotated[bool, typer.Option("--full", help="Show full chunk text instead of snippet")] = False,
-    mode: Annotated[str, typer.Option("--mode", help="Search mode: semantic, keyword, hybrid")] = "semantic",
+    mode: Annotated[str, typer.Option("--mode", help="Search mode: hybrid, semantic, keyword")] = "hybrid",
 ):
     """Search indexed documents using a natural-language query.
 
-    --mode semantic  Embedding-based cosine similarity (default).
+    --mode hybrid    Balanced semantic + keyword ranking with exact-match boosts (default).
+    --mode semantic  Embedding-based cosine similarity.
     --mode keyword   BM25 full-text keyword search (no API calls).
-    --mode hybrid    Average of normalized semantic + keyword scores.
     """
     from .db import Database
     from .search import search as do_search

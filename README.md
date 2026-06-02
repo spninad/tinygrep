@@ -8,7 +8,7 @@ Semantic search and topic clustering for local folders of markdown notes and art
 
 1. **Index** — walks your folder, splits each file into overlapping text chunks, and calls an embedding API to turn each chunk into a vector. Vectors are stored in a local SQLite database (`.tinygrep/index.db` inside your folder). Files that haven't changed are skipped on subsequent runs.
 
-2. **Search** — embeds your query with the same model, computes cosine similarity against every stored chunk, and returns the top-N matches with file path, score, and a text snippet.
+2. **Search** — combines semantic similarity, BM25 keyword matching, and lightweight exact-match boosts to rank stored chunks, then returns the top-N matches with file path, score, and a text snippet.
 
 3. **Cluster** — mean-pools each document's chunk embeddings into a single vector, runs UMAP to reduce dimensionality, then HDBSCAN to find natural topic groups — no need to specify how many clusters you want.
 
@@ -57,7 +57,7 @@ Options:
 
 ### `tinygrep search QUERY`
 
-Search with a natural-language query.
+Search with a natural-language query. By default, `tinygrep` uses a balanced hybrid ranker so exact hits do not get buried under looser semantic matches.
 
 ```
 Options:
@@ -65,9 +65,14 @@ Options:
   -n, --top-n INT       Number of results  [default: 10]
   -o, --format TEXT     Output format: text, json  [default: text]
       --full            Show full chunk text instead of a snippet
+      --mode TEXT       Search mode: hybrid, semantic, keyword  [default: hybrid]
   -p, --provider TEXT
   -m, --model TEXT
 ```
+
+- `hybrid` — balanced semantic + keyword ranking with exact-match boosts
+- `semantic` — embedding cosine similarity only
+- `keyword` — BM25 only, no query embedding API call
 
 **Example — JSON output for scripting:**
 ```bash
