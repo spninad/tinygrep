@@ -189,13 +189,32 @@ def search(
     provider: Annotated[Optional[str], typer.Option("--provider", "-p")] = None,
     model: Annotated[Optional[str], typer.Option("--model", "-m")] = None,
     full: Annotated[bool, typer.Option("--full", help="Show full chunk text instead of snippet")] = False,
+    mode: Annotated[str, typer.Option("--mode", help="Search mode: semantic, keyword, hybrid")] = "semantic",
 ):
-    """Search indexed documents using a natural-language query."""
+    """Search indexed documents using a natural-language query.
+
+    --mode semantic  Embedding-based cosine similarity (default).
+    --mode keyword   BM25 full-text keyword search (no API calls).
+    --mode hybrid    Average of normalized semantic + keyword scores.
+    """
     from .db import Database
     from .search import search as do_search
 
+    if mode not in ("semantic", "keyword", "hybrid"):
+        err_console.print("[red]Error:[/red] --mode must be one of: semantic, keyword, hybrid")
+        raise typer.Exit(1)
+
     root = _resolve_root(path)
     emb_provider, _ = _load_provider(root, provider, model)
+
+    # Restrict results to the given folder, or CWD if not specified.
+    folder_prefix: Optional[str] = None
+    search_dir = (path or Path(".")).expanduser().resolve()
+    try:
+        rel = search_dir.relative_to(root)
+        folder_prefix = str(rel) if str(rel) != "." else None
+    except ValueError:
+        pass  # path is outside root — no filtering, let search return nothing naturally
 
     db_file = _db_path(root)
     if not db_file.exists():
@@ -203,7 +222,7 @@ def search(
         raise typer.Exit(1)
 
     with Database(db_file) as db:
-        results = do_search(query, db, emb_provider, top_k=top_n)
+        results = do_search(query, db, emb_provider, top_k=top_n, mode=mode, folder_prefix=folder_prefix)
 
     if not results:
         console.print("[yellow]No results found.[/yellow]")
